@@ -15,6 +15,10 @@ ftr = [3600,60,1]
 EXPIRE_TIME_SECOUNDS = sum([a*b for a,b in zip(ftr, map(int,EXPIRE_TIME_STR.split(':')))])
 
 IMAGE_DISPLAY_TIMEOUT = 10
+def exit_images():
+    print('killing images')
+    cmd = 'pkill feh'
+    os.system(cmd)
 
 def reopen_chromium():
     print('killing chromium')
@@ -97,49 +101,53 @@ def get_product_image(barcode):
             
             print(f'barcode {barcode} is valid')
             waiting_image = Path("loading.png")
-            p = open_image_process(waiting_image)
+            open_image_process(waiting_image)
             api_ask_for_image(barcode)
-            exit_image_process_after_timeout(p, 5)
+            #exit_image_process_after_timeout(p, 5)
             
             return get_product_image(barcode)
         else:
             print('error: scaned invalid barcode!')
         
 import subprocess
-def exit_image_process(p):
-    p.kill()
-def exit_image_process_after_timeout(image_process, ptimeout):
-    threading.Thread(target=exit_image_thread, args=(image_process,ptimeout)).start()
+#def exit_image_process(p):
+#    p.kill()
+#def exit_image_process_after_timeout(image_process, ptimeout):
+#    threading.Thread(target=exit_image_thread, args=(image_process,ptimeout)).start()
     #time.sleep(IMAGE_DISPLAY_TIMEOUT)
     
 
-def exit_image_thread(image_process,ptimeout):
-    time.sleep(ptimeout)
-    exit_image_process(image_process)
+#def exit_image_thread(image_process,ptimeout):
+#    time.sleep(ptimeout)
+#    exit_image_process(image_process)
 
 def main():
     reopen_chromium()
     # listen to barcode scanner:
     #barcodes = ['676525117969', '676525116443', '676525117969']
-    p = None
+    timer = None
     time.sleep(5)
     for barcode in get_barcode_input():
         print('new barcode scaned: ', barcode)
         image = get_product_image(barcode)
         print('got barcode image: ', image)
-        if p:
-            p.terminate()
-        p = open_image_process(image)
-        exit_image_process_after_timeout(p, IMAGE_DISPLAY_TIMEOUT)
+        open_image_process(image)
+        #TODO: exit all images after timeout
+        if timer != None:
+            timer.cancel()
+        timer = threading.Timer(20.0, exit_images)
+        timer.start()
 
 def open_image_process(image):
-    cmd= 'feh --auto-zoom --borderless --fullscreen --hide-pointer ' + str(image)
-    print('executing: ', cmd)
-    my_env = os.environ.copy()
-    my_env["DISPLAY"] = ":0"
+    cmd = 'sudo -u pi /home/pi/Desktop/barcode_scanner/open_image.sh ' + str(image) + ' &'
+    os.system(cmd)
+    #cmd= 'feh --auto-zoom --borderless --fullscreen --hide-pointer ' + str(image)
+    #print('executing: ', cmd)
+    #my_env = os.environ.copy()
+    #my_env["DISPLAY"] = ":0"
 
-    p = subprocess.Popen(['feh', '--auto-zoom', '--borderless', '--fullscreen', '--hide-pointer', image], env=my_env)
-    return p
+    #p = subprocess.Popen(['feh', '--auto-zoom', '--borderless', '--fullscreen', '--hide-pointer', image], env=my_env)
+    #return p
 
 if __name__ == '__main__':
     main()
