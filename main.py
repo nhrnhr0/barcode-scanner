@@ -1,40 +1,47 @@
-
 from evdev import InputDevice, categorize, ecodes,list_devices
+import os
+from pathlib import Path
+import convertapi
+import secrects
+import time
+import threading
+import barcodenumber
 
-import os,subprocess, time, threading
+convertapi.api_secret = secrects.api_secret
+PRODUCTS_SERVER = 'http://3.136.112.72:8010/product/'
 
+EXPIRE_TIME_STR = '48:00:00'
+ftr = [3600,60,1]
+EXPIRE_TIME_SECOUNDS = sum([a*b for a,b in zip(ftr, map(int,EXPIRE_TIME_STR.split(':')))])
 
-# exit all chromium windows and reopen the main page
-def exit_chromium():
+IMAGE_DISPLAY_TIMEOUT = 10
+
+def reopen_chromium():
     print('killing chromium')
     cmd = 'sudo -u pi /home/pi/Desktop/barcode_scanner/chromiumn_main_page.sh &'
     os.system('pkill -o chromium')
     os.system(cmd)
 
+def api_ask_for_image(barcode):
+    print('WARNING: sending request to the api')
+    convertapi.convert('png', {
+        'Url': PRODUCTS_SERVER + barcode
+    }, from_format = 'web').save_files(f'images/{barcode}.png')
 
-# open a chromium product page
-def handle_barcode(barcode):
-    if barcode != None and barcode != '':
-        cmd = 'sudo -u pi /home/pi/Desktop/barcode_scanner/chromiumn_product_page.sh ' + barcode + ' &'
-        os.system(cmd)
-
-
-# start listen to the barcode scanner and open chromium browsers
-def main():
-
-
-    # iterate all input devices and find the barcode scanner nad saved it as device
+# configre the scanner and yeild the scaned barcode
+def get_barcode_input():
     devices = [InputDevice(path) for path in list_devices()]
     i = 0
     bar_device = None
     timer = None
+    
     for device in devices:
         print(i, ') ',device.path, device.name, device.phys)
         i+=1
         if 'Barcode Reader' in device.name:
             bar_device = InputDevice(device.path)
 
-    device = bar_device
+    device = bar_device#devices[3]
     os.system('echo "selected device: ' + device.path + '"')
 
 
@@ -48,7 +55,6 @@ def main():
         50: u'M', 51: u',', 52: u'.', 53: u'/', 54: u'RSHFT', 56: u'LALT', 100: u'RALT'
     }
     
-    exit_chromium() # used in the start to open the first main page
     barcode = ''
     # wait for a key read from the barcode scanner
     for event in device.read_loop():
@@ -57,23 +63,83 @@ def main():
             # Down events only
             if data.keystate == 1:  
                 # get the key pressed
-                key_lookup = scancodes.get(data.scancode) or u'UNKNOWN:{}'.format(data.scancode)  
+                key_lookup = scancodes.get(data.scancode) or ''#u'UNKNOWN:{}'.format(data.scancode)  
 
                 # if enter pressed
                 if key_lookup == 'CRLF':
 
-                    print('================================== new barcode scaned: ', barcode)
+                    #print('================================== new barcode scaned: ', barcode)
 
                     # a new barcode is scand:
-                    # reset or first start the timer for closing the chromium window to prevent early closing
-                    if timer != None:
-                        timer.cancel()
-                    timer = threading.Timer(20.0, exit_chromium)
-                    timer.start()
-                    print('============================= timer', timer)
-                    handle_barcode(barcode, timer)
+                    yield barcode
                     barcode = ''
                 else:
                     barcode += key_lookup
+
+def get_product_image(barcode):
+    if barcode == '': return
+
+    barcode_image = Path(f"images/{barcode}.png")
+    
+    if barcode_image.exists():
+        last_modifed = os.path.getmtime(f"images/{barcode}.png")
+        current_time = time.time()
+        secounds_sense_modifed = current_time - last_modifed
+        print(f'file images/{barcode} found - secounds sense modifed: {secounds_sense_modifed}')
+        if secounds_sense_modifed > EXPIRE_TIME_SECOUNDS:
+            print('image is stale, redownload...')
+            x = threading.Thread(target=api_ask_for_image, args=(barcode,))
+            x.start()
+        return barcode_image
+    else:
+        print(f'barcode {barcode} image file not found')
+        if barcodenumber.check_code('UPCA',barcode):
+            
+            print(f'barcode {barcode} is valid')
+            waiting_image = Path("loading.png")
+            p = open_image_process(waiting_image)
+            api_ask_for_image(barcode)
+            exit_image_process_after_timeout(p, 5)
+            
+            return get_product_image(barcode)
+        else:
+            print('error: scaned invalid barcode!')
+        
+import subprocess
+def exit_image_process(p):
+    p.kill()
+def exit_image_process_after_timeout(image_process, ptimeout):
+    threading.Thread(target=exit_image_thread, args=(image_process,ptimeout)).start()
+    #time.sleep(IMAGE_DISPLAY_TIMEOUT)
+    
+
+def exit_image_thread(image_process,ptimeout):
+    time.sleep(ptimeout)
+    exit_image_process(image_process)
+
+def main():
+    reopen_chromium()
+    # listen to barcode scanner:
+    #barcodes = ['676525117969', '676525116443', '676525117969']
+    p = None
+    time.sleep(5)
+    for barcode in get_barcode_input():
+        print('new barcode scaned: ', barcode)
+        image = get_product_image(barcode)
+        print('got barcode image: ', image)
+        if p:
+            p.terminate()
+        p = open_image_process(image)
+        exit_image_process_after_timeout(p, IMAGE_DISPLAY_TIMEOUT)
+
+def open_image_process(image):
+    cmd= 'feh --auto-zoom --borderless --fullscreen --hide-pointer ' + str(image)
+    print('executing: ', cmd)
+    my_env = os.environ.copy()
+    my_env["DISPLAY"] = ":0"
+
+    p = subprocess.Popen(['feh', '--auto-zoom', '--borderless', '--fullscreen', '--hide-pointer', image], env=my_env)
+    return p
+
 if __name__ == '__main__':
     main()
